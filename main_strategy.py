@@ -6,6 +6,8 @@ Date: 2024-01-01
 
 from rqalpha_plus.apis import *
 from indicators.peak_valley_detector import PeakValleyDetector
+from indicators.second_level_detector import SecondLevelDetector
+from indicators.multi_timeframe_fusion import MultiTimeframeFusion
 from utils.risk_manager import RiskManager
 from utils.data_manager import DataManager
 from config import STRATEGY_CONFIG
@@ -48,6 +50,26 @@ def init(context):
         min_valley_depth=peak_config['min_valley_depth']
     )
     
+    # 初始化秒级检测器
+    second_config = STRATEGY_CONFIG['SECOND_LEVEL_CONFIG']
+    if second_config['enabled']:
+        context.second_detector = SecondLevelDetector(
+            window_size=second_config['window_size'],
+            min_peak_height=second_config['min_peak_height'],
+            min_valley_depth=second_config['min_valley_depth']
+        )
+        
+        # 初始化多时间框架融合器
+        fusion_config = STRATEGY_CONFIG['MULTI_TIMEFRAME_CONFIG']
+        context.signal_fusion = MultiTimeframeFusion(
+            minute_weight=fusion_config['minute_signal_weight'],
+            second_weight=fusion_config['second_signal_weight'],
+            threshold=fusion_config['cross_timeframe_threshold']
+        )
+        
+        # 秒级数据缓存
+        context.second_data_cache = {}
+    
     risk_config = STRATEGY_CONFIG['RISK_CONFIG']
     context.risk_manager = RiskManager(
         max_position_ratio=risk_config['max_position_ratio'],
@@ -62,7 +84,7 @@ def init(context):
     context.daily_trades = 0
     context.last_signals = {}
     
-    logger.info("分时顶底交易策略初始化完成")
+    logger.info("多时间框架分时顶底交易策略初始化完成")
 
 def before_trading(context):
     """盘前准备"""
@@ -97,41 +119,56 @@ def handle_bar(context, bar_dict):
         current_bar = bar_dict[stock]
         current_price = current_bar.close
         
-        # 获取历史数据
+        # 获取分钟级历史数据
         price_data = context.data_manager.get_price_series(stock, context, 50)
         if len(price_data) < 30:
             continue
             
-        # 识别分时顶底信号
-        signals = context.peak_valley_detector.detect_signals(
+        # 获取分钟级信号
+        minute_signals = context.peak_valley_detector.detect_signals(
             price_data, current_price, current_time
         )
+        
+        # 获取秒级信号（如果启用）
+        final_signals = minute_signals
+        if hasattr(context, 'second_detector'):
+            second_signals = _get_second_level_signals(context, stock, current_price, current_time)
+            if second_signals:
+                final_signals = context.signal_fusion.fuse_signals(
+                    minute_signals, second_signals, current_time
+                )
         
         # 获取当前持仓
         position = get_position(stock)
         current_quantity = position.quantity if position else 0
         
         # 处理卖出信号（分时顶）
-        if signals['peak_signal'] and current_quantity > 0:
+        if final_signals['peak_signal'] and current_quantity > 0:
             sell_amount = context.risk_manager.calculate_sell_amount(
-                current_quantity, signals['peak_strength']
+                current_quantity, final_signals['peak_strength']
             )
             if sell_amount > 0:
                 order_shares(stock, -sell_amount)
                 context.daily_trades += 1
-                logger.info(f"分时顶卖出: {stock}, 数量: {sell_amount}, 价格: {current_price:.2f}, 强度: {signals['peak_strength']:.2f}")
+                signal_info = ""
+                if 'signal_confidence' in final_signals:
+                    signal_info = f", 置信度: {final_signals['signal_confidence']}"
+                logger.info(f"分时顶卖出: {stock}, 数量: {sell_amount}, 价格: {current_price:.2f}, 强度: {final_signals['peak_strength']:.2f}{signal_info}")
                 
         # 处理买入信号（分时底）
-        elif signals['valley_signal'] and current_quantity == 0:
+        elif final_signals['valley_signal'] and current_quantity == 0:
             if context.risk_manager.can_open_position(context, stock, current_price):
                 buy_amount = context.risk_manager.calculate_buy_amount(
-                    context, current_price, signals['valley_strength']
+                    context, current_price, final_signals['valley_strength']
                 )
                 if buy_amount > 0:
                     order_shares(stock, buy_amount)
                     context.positions_status[stock]['entry_price'] = current_price
                     context.daily_trades += 1
-                    logger.info(f"分时底买入: {stock}, 数量: {buy_amount}, 价格: {current_price:.2f}, 强度: {signals['valley_strength']:.2f}")
+                    signal_info = ""
+                    if 'signal_confidence' in final_signals:
+                        signal_info = f", 置信度: {final_signals['signal_confidence']}"
+                    logger.info(f"分时底买入: {stock}, 数量: {buy_amount}, 价格: {current_price:.2f}, 强度: {final_signals['valley_strength']:.2f}{signal_info}")
         
         # 止损止盈检查
         if current_quantity > 0:
@@ -146,7 +183,33 @@ def handle_bar(context, bar_dict):
                     logger.info(f"{reason}: {stock}, 入场价: {entry_price:.2f}, 当前价: {current_price:.2f}")
         
         # 更新信号记录
-        context.last_signals[stock] = signals
+        context.last_signals[stock] = final_signals
+
+def _get_second_level_signals(context, stock, current_price, current_time):
+    """获取基于tick数据的秒级信号"""
+    try:
+        # 获取tick聚合的OHLCV数据
+        tick_ohlcv = context.data_manager.get_tick_ohlcv_data(stock, context, 100)
+        
+        if len(tick_ohlcv['close']) < 60:
+            return None
+        
+        # 获取实时市场微观结构指标
+        real_time_metrics = context.data_manager.get_real_time_market_metrics(stock, context)
+        
+        # 使用tick数据进行秒级信号检测
+        return context.second_detector.detect_second_signals(
+            tick_ohlcv['close'], 
+            current_price, 
+            current_time,
+            volume_series=tick_ohlcv['volume'],
+            tick_ohlcv=tick_ohlcv,
+            real_time_metrics=real_time_metrics
+        )
+        
+    except Exception as e:
+        logger.warning(f"获取tick级秒级信号失败: {stock}, 错误: {e}")
+        return None
 
 def after_trading(context):
     """盘后处理"""
@@ -172,3 +235,4 @@ def _is_trading_time(current_time):
         return True
     
     return False
+

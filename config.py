@@ -109,6 +109,33 @@ STRATEGY_CONFIG = {
         'parallel_processing': False,   # 是否启用并行处理
         'batch_size': 10,               # 批处理大小
         'memory_limit_mb': 512,         # 内存限制（MB）
+    },
+    
+    # 秒级监控配置
+    'SECOND_LEVEL_CONFIG': {
+        'enabled': True,                    # 是否启用秒级监控
+        'frequency': '3s',                  # 秒级频率改为3秒
+        'use_tick_data': True,              # 是否使用tick数据
+        'tick_aggregation_seconds': 3,      # tick数据聚合秒数
+        'window_size': 100,                 # 秒级窗口大小（相当于5分钟数据）
+        'sensitivity_multiplier': 1.5,     # 敏感度倍数
+        'min_peak_height': 0.003,          # 秒级最小顶部涨幅0.3%（更敏感）
+        'min_valley_depth': 0.003,         # 秒级最小底部跌幅0.3%
+        'rsi_period': 30,                  # 秒级RSI周期
+        'ma_periods': [10, 20, 30],        # 秒级均线周期
+        'signal_confirmation_seconds': 9,   # 信号确认时间（3个周期）
+        'max_false_signals_per_minute': 5, # 每分钟最大假信号数（提高容忍度）
+        'tick_volume_threshold': 1000,     # tick成交量阈值
+        'price_change_threshold': 0.001,   # 价格变化阈值0.1%
+    },
+    
+    # 多时间框架融合配置
+    'MULTI_TIMEFRAME_CONFIG': {
+        'require_minute_confirmation': True,    # 是否需要分钟级确认
+        'second_signal_weight': 0.3,          # 秒级信号权重
+        'minute_signal_weight': 0.7,          # 分钟级信号权重
+        'signal_decay_seconds': 30,           # 信号衰减时间
+        'cross_timeframe_threshold': 0.6,     # 跨时间框架信号阈值
     }
 }
 
@@ -205,3 +232,4 @@ TECHNICAL_INDICATORS = {
         'period': 14,
     }
 }
+

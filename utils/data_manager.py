@@ -6,6 +6,7 @@
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
+from .tick_data_processor import TickDataProcessor
 
 try:
     from rqalpha_plus.apis import history_bars, get_price
@@ -31,33 +32,42 @@ class DataManager:
         self.volume_cache = {}
         self.indicator_cache = {}
         
+        # 初始化Tick数据处理器
+        self.tick_processor = TickDataProcessor(aggregation_seconds=3)
+        
     def get_price_series(self, stock, context, length=50, frequency='1m'):
         """
-        获取价格序列
+        获取价格序列 - 支持多种频率包括tick聚合
         
         Args:
             stock: 股票代码
             context: 策略上下文
             length: 数据长度
-            frequency: 数据频率
+            frequency: 数据频率 ('1m', '3s', '5s', '10s', '15s', '30s')
             
         Returns:
             np.array: 价格序列
         """
         try:
-            # 尝试从缓存获取
             cache_key = f"{stock}_{frequency}_{length}"
+            
+            # 秒级数据缓存时间更短
+            cache_timeout = 5 if 's' in frequency else 60
+            
             if cache_key in self.price_cache:
                 cached_data, cache_time = self.price_cache[cache_key]
-                # 如果缓存时间在1分钟内，直接返回
-                if (context.now - cache_time).total_seconds() < 60:
+                if (context.now - cache_time).total_seconds() < cache_timeout:
                     return cached_data
             
-            # 获取新数据
-            prices = history_bars(stock, length, frequency, 'close')
+            # 根据频率获取数据
+            if frequency.endswith('s'):
+                # 使用tick数据聚合
+                tick_data = self.tick_processor.aggregate_ticks_to_seconds(stock, context, length)
+                prices = tick_data['close']
+            else:
+                prices = history_bars(stock, length, frequency, 'close')
             
             if prices is not None and len(prices) > 0:
-                # 更新缓存
                 self.price_cache[cache_key] = (prices, context.now)
                 self._clean_cache()
                 return prices
@@ -65,30 +75,37 @@ class DataManager:
                 return np.array([])
                 
         except Exception as e:
-            print(f"获取价格数据失败: {stock}, 错误: {e}")
+            print(f"获取价格数据失败: {stock}, 频率: {frequency}, 错误: {e}")
             return np.array([])
     
     def get_volume_series(self, stock, context, length=50, frequency='1m'):
         """
-        获取成交量序列
+        获取成交量序列 - 支持tick聚合
         
         Args:
             stock: 股票代码
             context: 策略上下文
             length: 数据长度
             frequency: 数据频率
-            
+        
         Returns:
             np.array: 成交量序列
         """
         try:
             cache_key = f"{stock}_volume_{frequency}_{length}"
+            cache_timeout = 5 if 's' in frequency else 60
+            
             if cache_key in self.volume_cache:
                 cached_data, cache_time = self.volume_cache[cache_key]
-                if (context.now - cache_time).total_seconds() < 60:
+                if (context.now - cache_time).total_seconds() < cache_timeout:
                     return cached_data
             
-            volumes = history_bars(stock, length, frequency, 'volume')
+            if frequency.endswith('s'):
+                # 使用tick数据聚合
+                tick_data = self.tick_processor.aggregate_ticks_to_seconds(stock, context, length)
+                volumes = tick_data['volume']
+            else:
+                volumes = history_bars(stock, length, frequency, 'volume')
             
             if volumes is not None and len(volumes) > 0:
                 self.volume_cache[cache_key] = (volumes, context.now)
@@ -98,7 +115,7 @@ class DataManager:
                 return np.array([])
                 
         except Exception as e:
-            print(f"获取成交量数据失败: {stock}, 错误: {e}")
+            print(f"获取成交量数据失败: {stock}, 频率: {frequency}, 错误: {e}")
             return np.array([])
     
     def get_ohlc_data(self, stock, context, length=50, frequency='1m'):
@@ -276,3 +293,39 @@ class DataManager:
         validity = 1.0 if np.all(data > 0) else 0.5
         
         return (completeness + continuity + validity) / 3.0
+
+    def get_tick_ohlcv_data(self, stock, context, length=100):
+        """
+        获取基于tick聚合的OHLCV数据
+        
+        Args:
+            stock: 股票代码
+            context: 策略上下文
+            length: 数据长度
+            
+        Returns:
+            dict: 包含OHLCV和额外指标的数据
+        """
+        try:
+            return self.tick_processor.aggregate_ticks_to_seconds(stock, context, length)
+        except Exception as e:
+            print(f"获取tick OHLCV数据失败: {stock}, 错误: {e}")
+            return self.tick_processor._empty_ohlcv_data()
+    
+    def get_real_time_market_metrics(self, stock, context):
+        """
+        获取实时市场微观结构指标
+        
+        Args:
+            stock: 股票代码
+            context: 策略上下文
+            
+        Returns:
+            dict: 实时市场指标
+        """
+        try:
+            return self.tick_processor.get_real_time_metrics(stock, context)
+        except Exception as e:
+            print(f"获取实时市场指标失败: {stock}, 错误: {e}")
+            return self.tick_processor._empty_metrics()
+
