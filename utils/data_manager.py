@@ -1,6 +1,5 @@
 """
-数据管理模块
-负责数据获取、缓存和预处理
+数据管理模块 - SuperMind平台直接替换版本
 """
 
 import numpy as np
@@ -8,25 +7,100 @@ import pandas as pd
 from datetime import datetime, timedelta
 from .tick_data_processor import TickDataProcessor
 
+# SuperMind API导入
 try:
-    from rqalpha_plus.apis import history_bars, get_price
+    import ths_udata as ts
+    from ths_udata import get_kline_data, get_tick_data, get_realtime_quotes
+    ts.init()  # 初始化SuperMind数据接口
+    SUPERMIND_AVAILABLE = True
 except ImportError:
-    # 兼容性处理
-    def history_bars(*args, **kwargs):
+    SUPERMIND_AVAILABLE = False
+    print("SuperMind API不可用，请检查安装")
+
+def history_bars(stock, length, frequency, field):
+    """
+    SuperMind版本的history_bars - 直接替换米筐API
+    """
+    if not SUPERMIND_AVAILABLE:
         return np.array([])
-    def get_price(*args, **kwargs):
-        return pd.DataFrame()
+    
+    try:
+        # 转换股票代码格式
+        symbol = stock.replace('.XSHE', '.SZ').replace('.XSHG', '.SH')
+        
+        # 转换频率格式
+        period_map = {
+            '1m': '1min', '5m': '5min', '15m': '15min', 
+            '30m': '30min', '1h': '60min', '1d': 'day'
+        }
+        period = period_map.get(frequency, '1min')
+        
+        # 获取K线数据
+        end_date = datetime.now().strftime('%Y%m%d')
+        df = get_kline_data(
+            symbol=symbol,
+            period=period,
+            count=length,
+            end_date=end_date
+        )
+        
+        if df is None or df.empty:
+            return np.array([])
+        
+        # 字段映射
+        field_map = {
+            'open': 'open', 'high': 'high', 'low': 'low',
+            'close': 'close', 'volume': 'volume'
+        }
+        
+        if field in field_map and field_map[field] in df.columns:
+            return df[field_map[field]].values
+        
+        return np.array([])
+        
+    except Exception as e:
+        print(f"获取历史数据失败: {stock}, {field}, 错误: {e}")
+        return np.array([])
+
+def get_ticks(stock, start_time, end_time):
+    """
+    SuperMind版本的get_ticks - 直接替换米筐API
+    """
+    if not SUPERMIND_AVAILABLE:
+        return []
+    
+    try:
+        symbol = stock.replace('.XSHE', '.SZ').replace('.XSHG', '.SH')
+        
+        df = get_tick_data(
+            symbol=symbol,
+            start_date=start_time.strftime('%Y%m%d %H:%M:%S'),
+            end_date=end_time.strftime('%Y%m%d %H:%M:%S')
+        )
+        
+        if df is None or df.empty:
+            return []
+        
+        # 转换为tick对象
+        ticks = []
+        for _, row in df.iterrows():
+            tick = type('Tick', (), {
+                'datetime': pd.to_datetime(row['time']),
+                'last': row['price'],
+                'volume': row['volume']
+            })()
+            ticks.append(tick)
+        
+        return ticks
+        
+    except Exception as e:
+        print(f"获取tick数据失败: {stock}, 错误: {e}")
+        return []
 
 class DataManager:
-    """数据管理器"""
+    """数据管理器 - SuperMind直接替换版本"""
     
     def __init__(self, cache_size=1000):
-        """
-        初始化数据管理器
-        
-        Args:
-            cache_size: 缓存大小
-        """
         self.cache_size = cache_size
         self.price_cache = {}
         self.volume_cache = {}
@@ -36,22 +110,9 @@ class DataManager:
         self.tick_processor = TickDataProcessor(aggregation_seconds=3)
         
     def get_price_series(self, stock, context, length=50, frequency='1m'):
-        """
-        获取价格序列 - 支持多种频率包括tick聚合
-        
-        Args:
-            stock: 股票代码
-            context: 策略上下文
-            length: 数据长度
-            frequency: 数据频率 ('1m', '3s', '5s', '10s', '15s', '30s')
-            
-        Returns:
-            np.array: 价格序列
-        """
+        """获取价格序列"""
         try:
             cache_key = f"{stock}_{frequency}_{length}"
-            
-            # 秒级数据缓存时间更短
             cache_timeout = 5 if 's' in frequency else 60
             
             if cache_key in self.price_cache:
@@ -59,13 +120,8 @@ class DataManager:
                 if (context.now - cache_time).total_seconds() < cache_timeout:
                     return cached_data
             
-            # 根据频率获取数据
-            if frequency.endswith('s'):
-                # 使用tick数据聚合
-                tick_data = self.tick_processor.aggregate_ticks_to_seconds(stock, context, length)
-                prices = tick_data['close']
-            else:
-                prices = history_bars(stock, length, frequency, 'close')
+            # 直接使用替换后的history_bars
+            prices = history_bars(stock, length, frequency, 'close')
             
             if prices is not None and len(prices) > 0:
                 self.price_cache[cache_key] = (prices, context.now)
@@ -79,18 +135,7 @@ class DataManager:
             return np.array([])
     
     def get_volume_series(self, stock, context, length=50, frequency='1m'):
-        """
-        获取成交量序列 - 支持tick聚合
-        
-        Args:
-            stock: 股票代码
-            context: 策略上下文
-            length: 数据长度
-            frequency: 数据频率
-        
-        Returns:
-            np.array: 成交量序列
-        """
+        """获取成交量序列"""
         try:
             cache_key = f"{stock}_volume_{frequency}_{length}"
             cache_timeout = 5 if 's' in frequency else 60
@@ -100,12 +145,8 @@ class DataManager:
                 if (context.now - cache_time).total_seconds() < cache_timeout:
                     return cached_data
             
-            if frequency.endswith('s'):
-                # 使用tick数据聚合
-                tick_data = self.tick_processor.aggregate_ticks_to_seconds(stock, context, length)
-                volumes = tick_data['volume']
-            else:
-                volumes = history_bars(stock, length, frequency, 'volume')
+            # 直接使用替换后的history_bars
+            volumes = history_bars(stock, length, frequency, 'volume')
             
             if volumes is not None and len(volumes) > 0:
                 self.volume_cache[cache_key] = (volumes, context.now)
@@ -119,18 +160,7 @@ class DataManager:
             return np.array([])
     
     def get_ohlc_data(self, stock, context, length=50, frequency='1m'):
-        """
-        获取OHLC数据
-        
-        Args:
-            stock: 股票代码
-            context: 策略上下文
-            length: 数据长度
-            frequency: 数据频率
-            
-        Returns:
-            dict: 包含OHLC数据的字典
-        """
+        """获取OHLC数据 - 直接替换API版本"""
         try:
             cache_key = f"{stock}_ohlc_{frequency}_{length}"
             if cache_key in self.indicator_cache:
@@ -138,7 +168,7 @@ class DataManager:
                 if (context.now - cache_time).total_seconds() < 60:
                     return cached_data
             
-            # 获取OHLC数据
+            # 直接使用替换后的history_bars获取OHLC数据
             open_prices = history_bars(stock, length, frequency, 'open')
             high_prices = history_bars(stock, length, frequency, 'high')
             low_prices = history_bars(stock, length, frequency, 'low')
@@ -156,7 +186,6 @@ class DataManager:
             # 检查数据完整性
             min_length = min([len(data) for data in ohlc_data.values() if len(data) > 0])
             if min_length > 0:
-                # 确保所有数据长度一致
                 for key in ohlc_data:
                     if len(ohlc_data[key]) > min_length:
                         ohlc_data[key] = ohlc_data[key][-min_length:]
@@ -295,17 +324,7 @@ class DataManager:
         return (completeness + continuity + validity) / 3.0
 
     def get_tick_ohlcv_data(self, stock, context, length=100):
-        """
-        获取基于tick聚合的OHLCV数据
-        
-        Args:
-            stock: 股票代码
-            context: 策略上下文
-            length: 数据长度
-            
-        Returns:
-            dict: 包含OHLCV和额外指标的数据
-        """
+        """获取基于tick聚合的OHLCV数据 - 直接替换版本"""
         try:
             return self.tick_processor.aggregate_ticks_to_seconds(stock, context, length)
         except Exception as e:
@@ -328,4 +347,6 @@ class DataManager:
         except Exception as e:
             print(f"获取实时市场指标失败: {stock}, 错误: {e}")
             return self.tick_processor._empty_metrics()
+
+
 

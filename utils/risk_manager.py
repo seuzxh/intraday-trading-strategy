@@ -67,31 +67,30 @@ class RiskManager:
             
         return True
     
-    def calculate_buy_amount(self, context, price, signal_strength):
+    def calculate_buy_amount_v2(self, portfolio, price, signal_strength):
         """
-        计算买入数量
+        计算买入数量 - SuperMind版本
         
         Args:
-            context: 策略上下文
+            portfolio: 组合对象
             price: 当前价格
             signal_strength: 信号强度(0-1)
             
         Returns:
             int: 买入股数
         """
-        total_value = context.portfolio.total_value
+        total_value = portfolio.total_value
         max_investment = total_value * self.max_position_ratio
         
         # 根据信号强度调整投资金额
-        # 信号强度越高，投资金额越大
-        base_ratio = 0.5  # 基础投资比例50%
-        strength_bonus = 0.5 * signal_strength  # 信号强度奖励
+        base_ratio = 0.5
+        strength_bonus = 0.5 * signal_strength
         investment_ratio = min(base_ratio + strength_bonus, 1.0)
         
         actual_investment = max_investment * investment_ratio
         
         # 确保不超过可用现金
-        available_cash = context.portfolio.cash
+        available_cash = portfolio.cash
         actual_investment = min(actual_investment, available_cash * 0.9)
         
         # 计算股数（整手买入）

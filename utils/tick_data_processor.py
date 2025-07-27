@@ -1,21 +1,11 @@
 """
-Tick数据处理器
-负责tick数据的获取、聚合和处理
+Tick数据处理器 - SuperMind直接替换版本
 """
 
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 from collections import defaultdict, deque
-
-try:
-    from rqalpha_plus.apis import get_ticks, history_ticks
-except ImportError:
-    # 兼容性处理
-    def get_ticks(*args, **kwargs):
-        return []
-    def history_ticks(*args, **kwargs):
-        return []
 
 class TickDataProcessor:
     """Tick数据处理器"""
@@ -38,7 +28,7 @@ class TickDataProcessor:
         
     def get_tick_data(self, stock, context, lookback_minutes=10):
         """
-        获取tick数据
+        获取tick数据 - 直接使用SuperMind API
         
         Args:
             stock: 股票代码
@@ -53,8 +43,8 @@ class TickDataProcessor:
             end_time = context.now
             start_time = end_time - timedelta(minutes=lookback_minutes)
             
-            # 获取tick数据
-            ticks = history_ticks(stock, start_time, end_time)
+            # 直接使用替换后的get_ticks函数
+            ticks = get_ticks(stock, start_time, end_time)
             
             if not ticks:
                 return []
